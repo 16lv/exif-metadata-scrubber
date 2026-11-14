@@ -57,3 +57,25 @@ def test_inspect_image_without_exif_and_reject_corrupt_files(tmp_path: Path) -> 
 
     with pytest.raises(ValueError, match="output_path must be distinct"):
         strip_metadata_to_copy(png_path, png_path)
+
+
+def test_strip_metadata_preserves_palette_colors_and_converts_rgba_to_jpeg(
+    tmp_path: Path,
+) -> None:
+    palette_src = tmp_path / "palette.png"
+    palette_out = tmp_path / "palette_clean.png"
+    rgba_src = tmp_path / "alpha.png"
+    jpg_out = tmp_path / "flattened.jpg"
+
+    rgb = Image.new("RGB", (16, 16), color=(20, 140, 220))
+    rgb.convert("P", palette=Image.Palette.ADAPTIVE, colors=16).save(palette_src)
+
+    strip_metadata_to_copy(palette_src, palette_out)
+    with Image.open(palette_out) as clean_palette:
+        assert clean_palette.convert("RGB").getpixel((0, 0)) == (20, 140, 220)
+
+    Image.new("RGBA", (16, 16), color=(0, 128, 255, 0)).save(rgba_src)
+    strip_metadata_to_copy(rgba_src, jpg_out)
+    with Image.open(jpg_out) as clean_jpg:
+        assert clean_jpg.format == "JPEG"
+        assert clean_jpg.getpixel((0, 0)) == (255, 255, 255)

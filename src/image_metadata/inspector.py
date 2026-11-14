@@ -69,25 +69,53 @@ def inspect_image(path: Path) -> ImageInspectionReport:
 
 
 def strip_metadata_to_copy(source_path: Path, output_path: Path) -> dict[str, Any]:
-    # Copy pixel data onto a fresh blank image canvas so cached EXIF info isn't carried over.
-    # Also block overwriting the original file by mistake.
-    if source_path.resolve() == output_path.resolve():
+    source = Path(source_path)
+    target = Path(output_path)
+    if source.resolve() == target.resolve():
         raise ValueError(
             "output_path must be distinct from source_path to preserve the original image"
         )
 
-    before = inspect_image(source_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    before = inspect_image(source)
+    target.parent.mkdir(parents=True, exist_ok=True)
 
-    with Image.open(source_path) as img:
-        clean_img = Image.new(img.mode, img.size)
-        clean_img.paste(img)
-        clean_img.save(output_path, format=img.format or "JPEG")
+    ext_format_map = {
+        ".jpg": "JPEG",
+        ".jpeg": "JPEG",
+        ".png": "PNG",
+        ".webp": "WEBP",
+        ".bmp": "BMP",
+        ".tif": "TIFF",
+        ".tiff": "TIFF",
+    }
 
-    after = inspect_image(output_path)
+    with Image.open(source) as img:
+        target_format = ext_format_map.get(target.suffix.lower(), img.format or "JPEG")
+
+        # Palette ("P") images require mode conversion so colour palette entries are not discarded
+        if img.mode == "P":
+            has_transparency = "transparency" in img.info
+            pixel_source = img.convert("RGBA" if has_transparency else "RGB")
+        else:
+            pixel_source = Image.new(img.mode, img.size)
+            pixel_source.paste(img)
+
+        if target_format == "JPEG" and pixel_source.mode in ("RGBA", "LA", "PA"):
+            rgba = pixel_source.convert("RGBA")
+            flattened = Image.new("RGB", rgba.size, (255, 255, 255))
+            flattened.paste(rgba, mask=rgba.split()[3])
+            clean_img = flattened
+        elif target_format == "JPEG" and pixel_source.mode not in ("RGB", "L", "CMYK"):
+            clean_img = pixel_source.convert("RGB")
+        else:
+            clean_img = pixel_source
+
+        clean_img.save(target, format=target_format)
+
+    after = inspect_image(target)
     return {
-        "source_path": str(source_path),
-        "output_path": str(output_path),
+        "source_path": str(source),
+        "output_path": str(target),
         "removed_exif_field_count": len(before.exif_fields),
         "removed_gps_data": before.has_gps_info,
         "output_has_exif": after.has_exif,
