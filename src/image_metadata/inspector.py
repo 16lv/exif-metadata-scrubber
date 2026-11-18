@@ -7,6 +7,7 @@ from typing import Any
 from PIL import ExifTags, Image, UnidentifiedImageError
 
 GPS_TAG_ID = 34853
+SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
 
 
 @dataclass(frozen=True)
@@ -24,7 +25,6 @@ class ImageInspectionReport:
 
 
 def inspect_image(path: Path) -> ImageInspectionReport:
-    # Read basic dimensions/mode and decode any EXIF + nested GPS tags (tag 34853)
     if not path.exists() or not path.is_file():
         raise FileNotFoundError(f"Image file not found: {path}")
 
@@ -92,7 +92,7 @@ def strip_metadata_to_copy(source_path: Path, output_path: Path) -> dict[str, An
     with Image.open(source) as img:
         target_format = ext_format_map.get(target.suffix.lower(), img.format or "JPEG")
 
-        # Palette ("P") images require mode conversion so colour palette entries are not discarded
+        # Palette ("P") images must be converted so indexed colours are preserved
         if img.mode == "P":
             has_transparency = "transparency" in img.info
             pixel_source = img.convert("RGBA" if has_transparency else "RGB")
@@ -105,7 +105,13 @@ def strip_metadata_to_copy(source_path: Path, output_path: Path) -> dict[str, An
             flattened = Image.new("RGB", rgba.size, (255, 255, 255))
             flattened.paste(rgba, mask=rgba.split()[3])
             clean_img = flattened
-        elif target_format == "JPEG" and pixel_source.mode not in ("RGB", "L", "CMYK"):
+        elif (
+            (target_format == "JPEG" and pixel_source.mode not in ("RGB", "L", "CMYK"))
+            or (
+                target_format in ("PNG", "WEBP", "BMP")
+                and pixel_source.mode not in ("RGB", "RGBA", "L", "LA")
+            )
+        ):
             clean_img = pixel_source.convert("RGB")
         else:
             clean_img = pixel_source
@@ -120,3 +126,21 @@ def strip_metadata_to_copy(source_path: Path, output_path: Path) -> dict[str, An
         "removed_gps_data": before.has_gps_info,
         "output_has_exif": after.has_exif,
     }
+
+
+def scrub_directory(source_dir: Path, output_dir: Path) -> list[dict[str, Any]]:
+    src_root = Path(source_dir)
+    dst_root = Path(output_dir)
+    if not src_root.is_dir():
+        raise NotADirectoryError(f"Source path is not a directory: {src_root}")
+    if src_root.resolve() == dst_root.resolve() or src_root.resolve() in dst_root.resolve().parents:
+        raise ValueError("output_dir must be separate from and outside source_dir")
+
+    results: list[dict[str, Any]] = []
+    for entry in sorted(src_root.iterdir()):
+        if entry.is_symlink() or not entry.is_file():
+            continue
+        if entry.suffix.lower() not in SUPPORTED_EXTENSIONS:
+            continue
+        results.append(strip_metadata_to_copy(entry, dst_root / entry.name))
+    return results

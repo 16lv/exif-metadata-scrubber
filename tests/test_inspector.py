@@ -5,18 +5,24 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from src.image_metadata.inspector import inspect_image, strip_metadata_to_copy
+from src.image_metadata.inspector import (
+    GPS_TAG_ID,
+    inspect_image,
+    scrub_directory,
+    strip_metadata_to_copy,
+)
 
 
-def test_inspect_and_strip_exif_metadata_preserves_original_file(tmp_path: Path) -> None:
+def test_inspect_and_strip_exif_and_gps_preserves_original_file(tmp_path: Path) -> None:
     img_path = tmp_path / "sample_with_exif.jpg"
     clean_path = tmp_path / "sample_cleaned.jpg"
 
     img = Image.new("RGB", (64, 48), color=(30, 60, 90))
     exif = img.getexif()
-    exif[271] = "CardiffTestCamera"  # Make
-    exif[272] = "Model-X1"  # Model
-    exif[305] = "shss7-test-suite"  # Software
+    exif[271] = "TestCamera-A1"
+    exif[272] = "Model-X1"
+    exif[305] = "exif-scrubber-tests"
+    exif[GPS_TAG_ID] = {1: "N", 3: "W"}
     img.save(img_path, format="JPEG", exif=exif.tobytes())
 
     report = inspect_image(img_path)
@@ -24,20 +30,19 @@ def test_inspect_and_strip_exif_metadata_preserves_original_file(tmp_path: Path)
     assert report.height == 48
     assert report.format == "JPEG"
     assert report.has_exif is True
-    assert report.exif_fields.get("Make") == "CardiffTestCamera"
-    assert report.exif_fields.get("Model") == "Model-X1"
+    assert report.has_gps_info is True
+    assert report.gps_summary.get("GPSLatitudeRef") == "N"
+    assert report.exif_fields.get("Make") == "TestCamera-A1"
 
     summary = strip_metadata_to_copy(img_path, clean_path)
     assert summary["removed_exif_field_count"] >= 3
+    assert summary["removed_gps_data"] is True
     assert summary["output_has_exif"] is False
 
-    # Verify original image still has its EXIF metadata intact
-    original_after = inspect_image(img_path)
-    assert original_after.has_exif is True
-
-    # Verify cleaned copy has no EXIF metadata
+    assert inspect_image(img_path).has_exif is True
     cleaned_report = inspect_image(clean_path)
     assert cleaned_report.has_exif is False
+    assert cleaned_report.has_gps_info is False
     assert cleaned_report.exif_fields == {}
 
 
@@ -59,13 +64,13 @@ def test_inspect_image_without_exif_and_reject_corrupt_files(tmp_path: Path) -> 
         strip_metadata_to_copy(png_path, png_path)
 
 
-def test_strip_metadata_preserves_palette_colors_and_converts_rgba_to_jpeg(
-    tmp_path: Path,
-) -> None:
+def test_strip_metadata_handles_palette_rgba_and_cmyk_conversions(tmp_path: Path) -> None:
     palette_src = tmp_path / "palette.png"
     palette_out = tmp_path / "palette_clean.png"
     rgba_src = tmp_path / "alpha.png"
     jpg_out = tmp_path / "flattened.jpg"
+    cmyk_src = tmp_path / "print_cmyk.jpg"
+    cmyk_png_out = tmp_path / "converted_rgb.png"
 
     rgb = Image.new("RGB", (16, 16), color=(20, 140, 220))
     rgb.convert("P", palette=Image.Palette.ADAPTIVE, colors=16).save(palette_src)
@@ -79,3 +84,30 @@ def test_strip_metadata_preserves_palette_colors_and_converts_rgba_to_jpeg(
     with Image.open(jpg_out) as clean_jpg:
         assert clean_jpg.format == "JPEG"
         assert clean_jpg.getpixel((0, 0)) == (255, 255, 255)
+
+    Image.new("CMYK", (16, 16), color=(0, 50, 100, 0)).save(cmyk_src, format="JPEG")
+    strip_metadata_to_copy(cmyk_src, cmyk_png_out)
+    with Image.open(cmyk_png_out) as clean_cmyk_png:
+        assert clean_cmyk_png.format == "PNG"
+        assert clean_cmyk_png.mode == "RGB"
+
+
+def test_scrub_directory_batch_skips_non_images_and_guards_overlap(tmp_path: Path) -> None:
+    src_dir = tmp_path / "photos"
+    out_dir = tmp_path / "scrubbed"
+    src_dir.mkdir()
+
+    img = Image.new("RGB", (20, 20), color=(40, 80, 120))
+    exif = img.getexif()
+    exif[271] = "LensCo"
+    img.save(src_dir / "holiday.jpg", format="JPEG", exif=exif.tobytes())
+    (src_dir / "notes.txt").write_text("ignore me", encoding="utf-8")
+
+    results = scrub_directory(src_dir, out_dir)
+    assert len(results) == 1
+    assert results[0]["output_has_exif"] is False
+    assert (out_dir / "holiday.jpg").is_file()
+    assert not (out_dir / "notes.txt").exists()
+
+    with pytest.raises(ValueError, match="separate from and outside"):
+        scrub_directory(src_dir, src_dir / "nested")
