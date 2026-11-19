@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import argparse
+import json
+from collections.abc import Sequence
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -68,7 +71,11 @@ def inspect_image(path: Path) -> ImageInspectionReport:
         raise ValueError(f"Unsupported or corrupt image file: {path}") from exc
 
 
-def strip_metadata_to_copy(source_path: Path, output_path: Path) -> dict[str, Any]:
+def strip_metadata_to_copy(
+    source_path: Path,
+    output_path: Path,
+    keep_icc_profile: bool = False,
+) -> dict[str, Any]:
     source = Path(source_path)
     target = Path(output_path)
     if source.resolve() == target.resolve():
@@ -91,8 +98,8 @@ def strip_metadata_to_copy(source_path: Path, output_path: Path) -> dict[str, An
 
     with Image.open(source) as img:
         target_format = ext_format_map.get(target.suffix.lower(), img.format or "JPEG")
+        icc_profile = img.info.get("icc_profile") if keep_icc_profile else None
 
-        # Palette ("P") images must be converted so indexed colours are preserved
         if img.mode == "P":
             has_transparency = "transparency" in img.info
             pixel_source = img.convert("RGBA" if has_transparency else "RGB")
@@ -116,7 +123,10 @@ def strip_metadata_to_copy(source_path: Path, output_path: Path) -> dict[str, An
         else:
             clean_img = pixel_source
 
-        clean_img.save(target, format=target_format)
+        save_kwargs: dict[str, Any] = {"format": target_format}
+        if icc_profile and target_format != "BMP":
+            save_kwargs["icc_profile"] = icc_profile
+        clean_img.save(target, **save_kwargs)
 
     after = inspect_image(target)
     return {
@@ -128,7 +138,11 @@ def strip_metadata_to_copy(source_path: Path, output_path: Path) -> dict[str, An
     }
 
 
-def scrub_directory(source_dir: Path, output_dir: Path) -> list[dict[str, Any]]:
+def scrub_directory(
+    source_dir: Path,
+    output_dir: Path,
+    keep_icc_profile: bool = False,
+) -> list[dict[str, Any]]:
     src_root = Path(source_dir)
     dst_root = Path(output_dir)
     if not src_root.is_dir():
@@ -142,5 +156,42 @@ def scrub_directory(source_dir: Path, output_dir: Path) -> list[dict[str, Any]]:
             continue
         if entry.suffix.lower() not in SUPPORTED_EXTENSIONS:
             continue
-        results.append(strip_metadata_to_copy(entry, dst_root / entry.name))
+        results.append(
+            strip_metadata_to_copy(entry, dst_root / entry.name, keep_icc_profile=keep_icc_profile)
+        )
     return results
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Inspect image EXIF/GPS metadata and write clean pixel copies."
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    inspect_cmd = sub.add_parser("inspect", help="Inspect metadata in a single image file")
+    inspect_cmd.add_argument("image", type=Path)
+
+    scrub_cmd = sub.add_parser("scrub", help="Strip metadata from a single image into a new copy")
+    scrub_cmd.add_argument("source", type=Path)
+    scrub_cmd.add_argument("output", type=Path)
+    scrub_cmd.add_argument("--keep-icc", action="store_true", help="Retain embedded ICC profile")
+
+    dir_cmd = sub.add_parser("scrub-dir", help="Strip metadata from supported images in a folder")
+    dir_cmd.add_argument("source_dir", type=Path)
+    dir_cmd.add_argument("output_dir", type=Path)
+    dir_cmd.add_argument("--keep-icc", action="store_true", help="Retain embedded ICC profile")
+
+    args = parser.parse_args(argv)
+    if args.command == "inspect":
+        print(json.dumps(asdict(inspect_image(args.image)), indent=2))
+    elif args.command == "scrub":
+        summary = strip_metadata_to_copy(args.source, args.output, keep_icc_profile=args.keep_icc)
+        print(json.dumps(summary, indent=2))
+    elif args.command == "scrub-dir":
+        results = scrub_directory(args.source_dir, args.output_dir, keep_icc_profile=args.keep_icc)
+        print(json.dumps({"processed": len(results), "files": results}, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

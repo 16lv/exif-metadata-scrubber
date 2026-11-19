@@ -5,9 +5,10 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from src.image_metadata.inspector import (
+from image_metadata.inspector import (
     GPS_TAG_ID,
     inspect_image,
+    main,
     scrub_directory,
     strip_metadata_to_copy,
 )
@@ -111,3 +112,21 @@ def test_scrub_directory_batch_skips_non_images_and_guards_overlap(tmp_path: Pat
 
     with pytest.raises(ValueError, match="separate from and outside"):
         scrub_directory(src_dir, src_dir / "nested")
+
+
+def test_cli_inspect_scrub_and_batch_commands(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    src = tmp_path / "camera.jpg"
+    out = tmp_path / "clean.jpg"
+
+    img = Image.new("RGB", (24, 24), color=(15, 25, 35))
+    exif = img.getexif()
+    exif[271] = "CameraCorp"
+    img.save(src, format="JPEG", exif=exif.tobytes())
+
+    assert main(["inspect", str(src)]) == 0
+    inspect_out = capsys.readouterr().out
+    assert "CameraCorp" in inspect_out
+
+    assert main(["scrub", str(src), str(out)]) == 0
+    scrub_out = capsys.readouterr().out
+    assert '"output_has_exif": false' in scrub_out
