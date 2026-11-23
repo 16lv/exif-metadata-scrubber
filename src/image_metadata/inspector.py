@@ -142,6 +142,7 @@ def scrub_directory(
     source_dir: Path,
     output_dir: Path,
     keep_icc_profile: bool = False,
+    recursive: bool = False,
 ) -> list[dict[str, Any]]:
     src_root = Path(source_dir)
     dst_root = Path(output_dir)
@@ -150,14 +151,16 @@ def scrub_directory(
     if src_root.resolve() == dst_root.resolve() or src_root.resolve() in dst_root.resolve().parents:
         raise ValueError("output_dir must be separate from and outside source_dir")
 
+    candidates = sorted(src_root.rglob("*") if recursive else src_root.iterdir())
     results: list[dict[str, Any]] = []
-    for entry in sorted(src_root.iterdir()):
+    for entry in candidates:
         if entry.is_symlink() or not entry.is_file():
             continue
         if entry.suffix.lower() not in SUPPORTED_EXTENSIONS:
             continue
+        rel_path = entry.relative_to(src_root)
         results.append(
-            strip_metadata_to_copy(entry, dst_root / entry.name, keep_icc_profile=keep_icc_profile)
+            strip_metadata_to_copy(entry, dst_root / rel_path, keep_icc_profile=keep_icc_profile)
         )
     return results
 
@@ -180,6 +183,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     dir_cmd.add_argument("source_dir", type=Path)
     dir_cmd.add_argument("output_dir", type=Path)
     dir_cmd.add_argument("--keep-icc", action="store_true", help="Retain embedded ICC profile")
+    dir_cmd.add_argument(
+        "--recursive",
+        action="store_true",
+        help="Traverse subdirectories and mirror structure under output_dir",
+    )
 
     args = parser.parse_args(argv)
     if args.command == "inspect":
@@ -188,7 +196,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         summary = strip_metadata_to_copy(args.source, args.output, keep_icc_profile=args.keep_icc)
         print(json.dumps(summary, indent=2))
     elif args.command == "scrub-dir":
-        results = scrub_directory(args.source_dir, args.output_dir, keep_icc_profile=args.keep_icc)
+        results = scrub_directory(
+            args.source_dir,
+            args.output_dir,
+            keep_icc_profile=args.keep_icc,
+            recursive=args.recursive,
+        )
         print(json.dumps({"processed": len(results), "files": results}, indent=2))
     return 0
 

@@ -28,7 +28,7 @@ Inspect an image and write a scrubbed copy from the CLI:
 ```bash
 exif-scrubber inspect photo.jpg
 exif-scrubber scrub photo.jpg clean/photo.jpg --keep-icc
-exif-scrubber scrub-dir raw_photos clean_photos
+exif-scrubber scrub-dir raw_photos clean_photos --recursive
 ```
 
 Use the Python functions directly:

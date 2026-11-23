@@ -130,3 +130,21 @@ def test_cli_inspect_scrub_and_batch_commands(tmp_path: Path, capsys: pytest.Cap
     assert main(["scrub", str(src), str(out)]) == 0
     scrub_out = capsys.readouterr().out
     assert '"output_has_exif": false' in scrub_out
+
+
+def test_recursive_scrub_directory_mirrors_nested_structure(tmp_path: Path) -> None:
+    src_root = tmp_path / "library"
+    nested = src_root / "2026" / "trip"
+    dst_root = tmp_path / "cleaned"
+    nested.mkdir(parents=True)
+
+    img = Image.new("RGB", (18, 18), color=(90, 120, 150))
+    exif = img.getexif()
+    exif[271] = "NestedCam"
+    img.save(nested / "frame.jpg", format="JPEG", exif=exif.tobytes())
+
+    assert scrub_directory(src_root, dst_root, recursive=False) == []
+    results = scrub_directory(src_root, dst_root, recursive=True)
+    assert len(results) == 1
+    assert (dst_root / "2026" / "trip" / "frame.jpg").is_file()
+    assert inspect_image(dst_root / "2026" / "trip" / "frame.jpg").has_exif is False
