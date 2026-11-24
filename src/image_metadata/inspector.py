@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from PIL import ExifTags, Image, UnidentifiedImageError
+from PIL import ExifTags, Image, ImageOps, UnidentifiedImageError
 
 GPS_TAG_ID = 34853
 SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
@@ -96,16 +97,20 @@ def strip_metadata_to_copy(
         ".tiff": "TIFF",
     }
 
-    with Image.open(source) as img:
-        target_format = ext_format_map.get(target.suffix.lower(), img.format or "JPEG")
-        icc_profile = img.info.get("icc_profile") if keep_icc_profile else None
-
-        if img.mode == "P":
-            has_transparency = "transparency" in img.info
-            pixel_source = img.convert("RGBA" if has_transparency else "RGB")
-        else:
-            pixel_source = Image.new(img.mode, img.size)
-            pixel_source.paste(img)
+    with Image.open(source) as raw_img:
+        target_format = ext_format_map.get(target.suffix.lower(), raw_img.format or "JPEG")
+        icc_profile = raw_img.info.get("icc_profile") if keep_icc_profile else None
+        img = ImageOps.exif_transpose(raw_img)
+        try:
+            if img.mode == "P":
+                has_transparency = "transparency" in img.info
+                pixel_source = img.convert("RGBA" if has_transparency else "RGB")
+            else:
+                pixel_source = Image.new(img.mode, img.size)
+                pixel_source.paste(img)
+        finally:
+            if img is not raw_img:
+                img.close()
 
         if target_format == "JPEG" and pixel_source.mode in ("RGBA", "LA", "PA"):
             rgba = pixel_source.convert("RGBA")
@@ -190,20 +195,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     args = parser.parse_args(argv)
-    if args.command == "inspect":
-        print(json.dumps(asdict(inspect_image(args.image)), indent=2))
-    elif args.command == "scrub":
-        summary = strip_metadata_to_copy(args.source, args.output, keep_icc_profile=args.keep_icc)
-        print(json.dumps(summary, indent=2))
-    elif args.command == "scrub-dir":
-        results = scrub_directory(
-            args.source_dir,
-            args.output_dir,
-            keep_icc_profile=args.keep_icc,
-            recursive=args.recursive,
-        )
-        print(json.dumps({"processed": len(results), "files": results}, indent=2))
-    return 0
+    try:
+        if args.command == "inspect":
+            print(json.dumps(asdict(inspect_image(args.image)), indent=2))
+        elif args.command == "scrub":
+            summary = strip_metadata_to_copy(args.source, args.output, keep_icc_profile=args.keep_icc)
+            print(json.dumps(summary, indent=2))
+        elif args.command == "scrub-dir":
+            results = scrub_directory(
+                args.source_dir,
+                args.output_dir,
+                keep_icc_profile=args.keep_icc,
+                recursive=args.recursive,
+            )
+            print(json.dumps({"processed": len(results), "files": results}, indent=2))
+        return 0
+    except (FileNotFoundError, IsADirectoryError, NotADirectoryError, ValueError, UnidentifiedImageError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

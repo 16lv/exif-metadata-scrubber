@@ -148,3 +148,23 @@ def test_recursive_scrub_directory_mirrors_nested_structure(tmp_path: Path) -> N
     assert len(results) == 1
     assert (dst_root / "2026" / "trip" / "frame.jpg").is_file()
     assert inspect_image(dst_root / "2026" / "trip" / "frame.jpg").has_exif is False
+
+
+def test_exif_orientation_transposed_upright_and_cli_missing_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rotated_src = tmp_path / "rotated.jpg"
+    upright_dst = tmp_path / "upright.jpg"
+
+    img = Image.new("RGB", (40, 20), color=(20, 60, 140))
+    exif = img.getexif()
+    exif[274] = 6  # Rotate 90 CW / 270 CCW in EXIF Orientation tag
+    img.save(rotated_src, format="JPEG", exif=exif.tobytes())
+
+    strip_metadata_to_copy(rotated_src, upright_dst)
+    clean_info = inspect_image(upright_dst)
+    assert clean_info.has_exif is False
+    assert (clean_info.width, clean_info.height) == (20, 40)
+
+    assert main(["inspect", str(tmp_path / "nonexistent.jpg")]) == 2
+    assert "error:" in capsys.readouterr().err

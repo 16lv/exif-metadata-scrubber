@@ -5,7 +5,7 @@ Image metadata inspector and non-destructive EXIF/GPS scrubber built with **Pyth
 ## Features
 
 - **Structured EXIF & GPS inspection**: `inspect_image()` extracts dimensions, image format, pixel mode, decoded EXIF tags, and nested `GPSInfo` IFD (`34853`) fields while failing clearly on corrupt or unsupported inputs.
-- **Pixel-buffer copy cleaning**: `strip_metadata_to_copy()` copies pixel data onto a fresh surface so auxiliary chunks (EXIF, GPS, XMP, PNG text chunks) never carry over, flattens transparent RGBA images onto white for JPEG exports, handles palette (`P`) transparency, converts `CMYK`/`YCbCr` to `RGB` for PNG/WebP/BMP, and optionally retains the ICC colour profile.
+- **Pixel-buffer copy cleaning**: `strip_metadata_to_copy()` applies `ImageOps.exif_transpose()` first so rotated photos save upright, then copies pixel data onto a fresh surface so EXIF/GPS/XMP tags never carry over, flattens transparent RGBA images onto white for JPEG exports, handles palette (`P`) transparency, converts `CMYK`/`YCbCr` to `RGB` for PNG/WebP/BMP, and optionally retains the ICC colour profile.
 - **Safe batch folder cleanup**: `scrub_directory()` processes supported extensions in a directory, skips symlinks, and blocks overlapping source/destination folders.
 - **CLI & Python API**: Works either as an importable library or via the `exif-scrubber` console script.
 
